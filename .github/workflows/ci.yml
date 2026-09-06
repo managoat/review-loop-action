@@ -14,3 +14,20 @@ jobs:
         with:
           node-version: '24'
       - run: node --test index.test.cjs
+  public-consumer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      # Exercise public resolution, action.yml, Node 24 and the real entrypoint.
+      # Invalid input must fail before requesting OIDC or starting paid work.
+      - uses: managoat/review-loop-action@f10fac7d0e21607dd4aa0da7d794e94780db2a65
+        id: dispatch
+        continue-on-error: true
+        with:
+          service-url: http://invalid.example
+      - name: Confirm the entrypoint rejected invalid input
+        if: always()
+        env:
+          OUTCOME: ${{ steps.dispatch.outcome }}
+        run: test "$OUTCOME" = failure
