@@ -1,0 +1,18 @@
+name: Managoat Review Loop
+description: Start or join a review loop and exit after acknowledgment. Approval is reported by the separate Review Loop check.
+author: Managoat
+branding:
+  icon: check-circle
+  color: purple
+inputs:
+  service-url:
+    description: HTTPS URL of the Review Loop service
+    required: true
+outputs:
+  run-id:
+    description: Durable Review Loop run ID
+  run-url:
+    description: Review Loop run evidence URL
+runs:
+  using: node24
+  main: index.cjs
