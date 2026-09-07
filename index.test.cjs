@@ -62,6 +62,83 @@ function acceptedWith(changes) {
   return Response.json({ accepted: true, id, url: `${origin}/runs/${id}`, ...changes }, { status: 202 });
 }
 
+function recoveryFixture(handler) {
+  let elapsed = 0, issued = 0, attempts = 0;
+  const sleeps = [];
+  const timer = { now: () => elapsed, wallNow: () => Date.UTC(2026, 8, 7) + elapsed, async sleep(ms) { sleeps.push(ms); elapsed += ms; } };
+  const fetchImpl = async (url, init) => {
+    if (String(url).startsWith('https://oidc.github.invalid/')) {
+      issued++;
+      return Response.json({ value: 'signed.oidc.token' });
+    }
+    assert.equal(String(url), `${origin}/api/dispatch`);
+    assert.equal(init.headers.authorization, 'Bearer signed.oidc.token');
+    assert.equal(init.body, '{}');
+    assert.equal(init.redirect, 'error');
+    return handler(++attempts, init);
+  };
+  return { run: () => dispatch(environment, fetchImpl, timer), timer, sleeps, advance(ms) { elapsed += ms; }, get attempts() { return attempts; }, get issued() { return issued; } };
+}
+
+test('transient HTTP failures reuse one credential with bounded backoff', async () => {
+  for (const status of [408, 429, 500, 502, 503, 504]) {
+    const f = recoveryFixture(attempt => attempt < 3 ? new Response('untrusted response', { status }) : accepted());
+    assert.deepEqual(await f.run(), { id, url: `${origin}/runs/${id}` });
+    assert.equal(f.issued, 1); assert.equal(f.attempts, 3); assert.deepEqual(f.sleeps, [5000, 15000]);
+  }
+});
+
+test('lost responses retry with unchanged admission authority', async () => {
+  const f = recoveryFixture(attempt => { if (attempt === 1) throw new Error('lost acknowledgment'); return accepted(); });
+  assert.deepEqual(await f.run(), { id, url: `${origin}/runs/${id}` });
+  assert.equal(f.issued, 1); assert.equal(f.attempts, 2);
+});
+
+test('refusals do not retry or reflect untrusted bodies', async () => {
+  for (const status of [400, 401, 403, 404, 409, 422]) {
+    const f = recoveryFixture(() => new Response('signed.oidc.token\n::error::untrusted', { status }));
+    await assert.rejects(f.run(), error => {
+      assert.match(error.message, /did not acknowledge/);
+      assert(!error.message.includes('signed.oidc.token'));
+      return true;
+    });
+    assert.equal(f.attempts, 1); assert.deepEqual(f.sleeps, []);
+  }
+});
+
+test('persistent transport failure stops without exposing exception contents', async () => {
+  const f = recoveryFixture(() => { throw new Error('signed.oidc.token'); });
+  await assert.rejects(f.run(), error => {
+    assert.match(error.message, /a run may already exist/);
+    assert(!error.message.includes('signed.oidc.token'));
+    return true;
+  });
+  assert.equal(f.attempts, 3);
+});
+
+test('Retry-After seconds and dates are honored without exceeding the budget', async () => {
+  for (const value of ['25', 'Mon, 07 Sep 2026 00:00:25 GMT']) {
+    const f = recoveryFixture(attempt => attempt === 1 ? new Response(null, { status: 503, headers: { 'retry-after': value } }) : accepted());
+    await f.run(); assert.deepEqual(f.sleeps, [25000]);
+  }
+  const f = recoveryFixture(() => new Response(null, { status: 429, headers: { 'retry-after': '120' } }));
+  await assert.rejects(f.run(), /did not acknowledge/);
+  assert.equal(f.attempts, 1); assert.deepEqual(f.sleeps, []);
+});
+
+test('an elapsed deadline prevents another request', async () => {
+  const f = recoveryFixture(() => new Response(null, { status: 503 }));
+  f.timer.sleep = async () => f.advance(90001);
+  await assert.rejects(f.run(), /did not acknowledge/); assert.equal(f.attempts, 1);
+});
+
+test('invalid acknowledgment bodies remain failures without retries', async () => {
+  for (const body of ['null', '{', JSON.stringify({ accepted: true, id, url: 'https://attacker.example' })]) {
+    const f = recoveryFixture(() => new Response(body, { status: 202 }));
+    await assert.rejects(f.run(), /invalid acknowledgment/); assert.equal(f.attempts, 1);
+  }
+});
+
 test('runner entrypoint writes outputs only after acknowledgment and never prints credentials', () => {
   const dir = mkdtempSync(join(tmpdir(), 'review-loop-action-'));
   try {

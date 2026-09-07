@@ -61,7 +61,16 @@ and service still enforce permissions. Installing it grants no extra authority.
 A green dispatch step means the service accepted the run. Follow the separate
 **Review Loop** check for approval, fixes, or a human decision. The step exits
 after acknowledgment; it does not wait for reviewers to finish or merge the PR.
-Rejected requests and invalid acknowledgments fail the step.
+A failed step may have lost the acknowledgment of an admitted run. Check the PR's
+Review Loop check before starting or retrying a loop.
+
+Network failures and HTTP 408, 429, 500, 502, 503 and 504 receive up to three
+attempts with the same credential and admission identity. Delays are at least
+5 then 15 seconds; longer `Retry-After` values are honored. Requests and delays
+share 90 seconds, after a separate 15-second credential request. A wait beyond
+that budget ends the step without retrying early. Authentication/configuration
+refusals and invalid acknowledgments fail immediately. Recovery cannot create a
+manual retry generation or bypass the service's revision checks.
 
 ## Versions and maintenance
 
