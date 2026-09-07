@@ -22,16 +22,18 @@ async function admit(service, credential, fetchImpl, timer) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const remaining = deadline - timer.now();
     if (remaining <= 0) throw unacknowledged();
-    let response;
+    let response, acknowledgment;
     try {
       response = await fetchImpl(`${service.origin}/api/dispatch`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(Math.ceil(Math.min(30000, remaining))), redirect: 'error' });
+      if (response.status === 202) acknowledgment = await response.text();
     } catch {
       // Fetch errors may contain credentials or an untrusted response. Report
       // only our fixed diagnostic after bounded transport recovery.
+      response = undefined;
     }
     if (response?.status === 202) {
       let result;
-      try { result = await response.json(); } catch { throw new Error('Review Loop returned an invalid acknowledgment; check the PR for an admitted run'); }
+      try { result = JSON.parse(acknowledgment); } catch { throw new Error('Review Loop returned an invalid acknowledgment; check the PR for an admitted run'); }
       if (result?.accepted !== true || typeof result.id !== 'string' || !/^[a-f0-9-]{36}$/.test(result.id) || result.url !== `${service.origin}/runs/${result.id}`) throw new Error('Review Loop returned an invalid acknowledgment; check the PR for an admitted run');
       return { id: result.id, url: result.url };
     }

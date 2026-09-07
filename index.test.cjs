@@ -88,10 +88,19 @@ test('transient HTTP failures reuse one credential with bounded backoff', async 
   }
 });
 
-test('lost responses retry with unchanged admission authority', async () => {
-  const f = recoveryFixture(attempt => { if (attempt === 1) throw new Error('lost acknowledgment'); return accepted(); });
-  assert.deepEqual(await f.run(), { id, url: `${origin}/runs/${id}` });
-  assert.equal(f.issued, 1); assert.equal(f.attempts, 2);
+test('lost headers and failed or aborted body streams retry with unchanged authority', async () => {
+  for (const phase of ['headers', 'body-error', 'body-abort', 'body-timeout']) {
+    const f = recoveryFixture(attempt => {
+      if (attempt !== 1) return accepted();
+      if (phase === 'headers') throw new Error('lost acknowledgment');
+      const error = phase === 'body-error' ? new TypeError('signed.oidc.token') : new DOMException('signed.oidc.token', phase === 'body-abort' ? 'AbortError' : 'TimeoutError');
+      return new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"accepted":true,')); controller.error(error);
+      } }), { status: 202 });
+    });
+    assert.deepEqual(await f.run(), { id, url: `${origin}/runs/${id}` });
+    assert.equal(f.issued, 1); assert.equal(f.attempts, 2);
+  }
 });
 
 test('refusals do not retry or reflect untrusted bodies', async () => {
