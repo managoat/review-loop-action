@@ -21,7 +21,7 @@ jobs:
     steps:
       # Exercise public resolution, action.yml, Node 24 and the real entrypoint.
       # Invalid input must fail before requesting OIDC or starting paid work.
-      - uses: managoat/review-loop-action@4f31ff57c6d268cfbc2119b14d0f03818fbdbaa4
+      - uses: managoat/review-loop-action@11e340fbef52e7da8482bbf870ad52d8613a9d2f
         id: dispatch
         continue-on-error: true
         with:
